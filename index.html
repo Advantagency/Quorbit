@@ -686,21 +686,28 @@
   <div class="sim-layout">
     <div class="sim-header">
       <select class="ticker-select" id="tickerSelect" onchange="changeTicker()">
-        <option value="AAPL">AAPL — Apple Inc.</option>
-        <option value="TSLA">TSLA — Tesla Inc.</option>
-        <option value="NVDA">NVDA — NVIDIA Corp.</option>
-        <option value="AMZN">AMZN — Amazon</option>
-        <option value="BTC">BTC — Bitcoin / USD</option>
-        <option value="ETH">ETH — Ethereum / USD</option>
-        <option value="SPY">SPY — S&amp;P 500 ETF</option>
+        <option value="bitcoin">BTC — Bitcoin</option>
+        <option value="ethereum">ETH — Ethereum</option>
+        <option value="solana">SOL — Solana</option>
+        <option value="binancecoin">BNB — BNB</option>
+        <option value="ripple">XRP — XRP</option>
+        <option value="dogecoin">DOGE — Dogecoin</option>
+        <option value="cardano">ADA — Cardano</option>
+        <option value="avalanche-2">AVAX — Avalanche</option>
+        <option value="chainlink">LINK — Chainlink</option>
+        <option value="the-open-network">TON — Toncoin</option>
       </select>
-      <div class="price-display" id="simPrice">$0.00</div>
-      <div class="price-change up" id="simChange">+0.00 (0.00%)</div>
+      <div class="price-display" id="simPrice">Loading…</div>
+      <div class="price-change up" id="simChange">—</div>
+      <div id="liveIndicator" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim)">
+        <span id="liveDot" style="width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block;transition:background 0.3s"></span>
+        <span id="liveLabel">Connecting…</span>
+      </div>
       <div class="tf-btns">
-        <button class="tf-btn active" onclick="setTF(this,'1m')">1m</button>
-        <button class="tf-btn" onclick="setTF(this,'5m')">5m</button>
-        <button class="tf-btn" onclick="setTF(this,'1h')">1h</button>
-        <button class="tf-btn" onclick="setTF(this,'1d')">1d</button>
+        <button class="tf-btn active" onclick="setTF(this,1,'hourly')">1h</button>
+        <button class="tf-btn" onclick="setTF(this,7,'daily')">7d</button>
+        <button class="tf-btn" onclick="setTF(this,30,'daily')">30d</button>
+        <button class="tf-btn" onclick="setTF(this,90,'daily')">90d</button>
       </div>
     </div>
 
@@ -732,7 +739,7 @@
           <div class="order-row"><span>Est. Total</span><span id="ordTotal">—</span></div>
           <div class="order-row"><span>Available Cash</span><span id="ordCash">—</span></div>
         </div>
-        <button class="btn-trade buy" id="tradeBtn" onclick="executeTrade()">BUY AAPL</button>
+        <button class="btn-trade buy" id="tradeBtn" onclick="executeTrade()">BUY BTC</button>
       </div>
 
       <div class="panel-section">
@@ -814,88 +821,134 @@
 <div id="toast"><span class="toast-icon" id="toastIcon">✓</span><span id="toastMsg"></span></div>
 
 <script>
+// ═══════════════════ CONFIG ═══════════════════
+const COINGECKO = 'https://api.coingecko.com/api/v3';
+// Map CoinGecko IDs → display symbols
+const COIN_SYMBOLS = {
+  bitcoin:'BTC', ethereum:'ETH', solana:'SOL', binancecoin:'BNB',
+  ripple:'XRP', dogecoin:'DOGE', cardano:'ADA', 'avalanche-2':'AVAX',
+  chainlink:'LINK', 'the-open-network':'TON'
+};
+
 // ═══════════════════ STATE ═══════════════════
 const START_CASH = 10000;
 let cash = START_CASH;
-let positions = {}; // { TICKER: { qty, avgPrice } }
+let positions  = {};   // { coinId: { qty, avgPrice, symbol } }
 let tradeHistory = [];
-let currentTicker = 'AAPL';
+let currentCoin = 'bitcoin';
 let currentSide = 'buy';
-let chartData = {};
-let tickerPrices = {};
+let chartData   = {};  // { coinId: [{open,high,low,close,time}] }
+let livePrice   = {};  // { coinId: number }
+let currentDays = 1;
+let currentInterval = 'hourly';
+let refreshTimer = null;
+let priceTickTimer = null;
 
-// ═══════════════════ PRICE DATA GEN ═══════════════════
-const BASE_PRICES = {
-  AAPL: 187, TSLA: 248, NVDA: 495, AMZN: 178, BTC: 67400, ETH: 3520, SPY: 523
-};
-const VOLATILITY = {
-  AAPL: 0.008, TSLA: 0.018, NVDA: 0.015, AMZN: 0.01, BTC: 0.025, ETH: 0.022, SPY: 0.005
-};
-
-function genCandles(ticker, count=80) {
-  const vol = VOLATILITY[ticker] || 0.01;
-  let price = BASE_PRICES[ticker] || 100;
-  const candles = [];
-  for (let i = 0; i < count; i++) {
-    const open = price;
-    const drift = (Math.random() - 0.48) * vol * price;
-    const close = Math.max(open + drift, 1);
-    const high = Math.max(open, close) + Math.random() * vol * price * 0.5;
-    const low = Math.min(open, close) - Math.random() * vol * price * 0.5;
-    candles.push({ open, high, low, close });
-    price = close;
+// ═══════════════════ COINGECKO FETCH HELPERS ═══════════════════
+async function fetchOHLC(coinId, days, interval) {
+  // CoinGecko free OHLC endpoint: returns [timestamp, open, high, low, close]
+  try {
+    const url = `${COINGECKO}/coins/${coinId}/ohlc?vs_currency=usd&days=${days}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('OHLC fetch failed');
+    const raw = await res.json();
+    return raw.map(r => ({ time: r[0], open: r[1], high: r[2], low: r[3], close: r[4] }));
+  } catch(e) {
+    console.warn('OHLC error', e);
+    return null;
   }
-  return candles;
 }
 
-function initPrices() {
-  Object.keys(BASE_PRICES).forEach(t => {
-    chartData[t] = genCandles(t);
-    tickerPrices[t] = chartData[t][chartData[t].length - 1].close;
-  });
+async function fetchLivePrice(coinId) {
+  try {
+    const url = `${COINGECKO}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Price fetch failed');
+    const data = await res.json();
+    return data[coinId] || null;
+  } catch(e) {
+    console.warn('Price error', e);
+    return null;
+  }
 }
-initPrices();
 
-function currentPrice() { return tickerPrices[currentTicker]; }
+async function fetchAllPrices() {
+  const ids = Object.keys(COIN_SYMBOLS).join(',');
+  try {
+    const url = `${COINGECKO}/simple/price?ids=${ids}&vs_currencies=usd`;
+    const res = await fetch(url);
+    const data = await res.json();
+    Object.keys(COIN_SYMBOLS).forEach(id => {
+      if (data[id]) livePrice[id] = data[id].usd;
+    });
+  } catch(e) { console.warn('Bulk price error', e); }
+}
+
+// ═══════════════════ LIVE STATUS DOT ═══════════════════
+function setLiveStatus(status) {
+  const dot   = document.getElementById('liveDot');
+  const label = document.getElementById('liveLabel');
+  if (!dot || !label) return;
+  if (status === 'live') {
+    dot.style.background = 'var(--green)';
+    label.textContent = 'Live data';
+    label.style.color = 'var(--green)';
+  } else if (status === 'error') {
+    dot.style.background = 'var(--red)';
+    label.textContent = 'API error — retrying';
+    label.style.color = 'var(--red)';
+  } else {
+    dot.style.background = 'var(--yellow)';
+    label.textContent = 'Loading…';
+    label.style.color = 'var(--yellow)';
+  }
+}
+
+// ═══════════════════ LOAD COIN DATA ═══════════════════
+async function loadCoinData(coinId, days, interval, showSpinner=true) {
+  setLiveStatus('loading');
+  if (showSpinner) {
+    document.getElementById('simPrice').textContent = 'Loading…';
+    document.getElementById('simChange').textContent = '—';
+  }
+
+  // Fetch OHLC candles
+  const candles = await fetchOHLC(coinId, days, interval);
+  // Fetch live price + 24h change
+  const priceData = await fetchLivePrice(coinId);
+
+  if (!candles || !priceData) {
+    setLiveStatus('error');
+    return;
+  }
+
+  chartData[coinId] = candles;
+  livePrice[coinId] = priceData.usd;
+
+  updateSimHeader(priceData);
+  updateOrderSummary();
+  updatePositionsTable();
+  updatePortfolioSidebar();
+  drawChart();
+  setLiveStatus('live');
+}
 
 // ═══════════════════ CHART CANVAS ═══════════════════
 let canvas, ctx;
-let animFrame;
 
 function initChart() {
   canvas = document.getElementById('chartCanvas');
   ctx = canvas.getContext('2d');
   resizeChart();
-  window.addEventListener('resize', resizeChart);
-  drawChart();
-  setInterval(tickPrice, 1800);
+  window.addEventListener('resize', () => { resizeChart(); drawChart(); });
 }
 
 function resizeChart() {
   if (!canvas) return;
-  canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-  canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-}
-
-function tickPrice() {
-  if (document.getElementById('screen-sim').classList.contains('active')) {
-    const t = currentTicker;
-    const vol = VOLATILITY[t] || 0.01;
-    const old = chartData[t][chartData[t].length - 1];
-    const newOpen = old.close;
-    const drift = (Math.random() - 0.48) * vol * newOpen;
-    const newClose = Math.max(newOpen + drift, 1);
-    const newHigh = Math.max(newOpen, newClose) + Math.random() * vol * newOpen * 0.3;
-    const newLow = Math.min(newOpen, newClose) - Math.random() * vol * newOpen * 0.3;
-    chartData[t].push({ open: newOpen, high: newHigh, low: newLow, close: newClose });
-    if (chartData[t].length > 100) chartData[t].shift();
-    tickerPrices[t] = newClose;
-    updateSimHeader();
-    updateOrderSummary();
-    updatePortfolioSidebar();
-    drawChart();
-  }
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = canvas.offsetWidth  * dpr;
+  canvas.height = canvas.offsetHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 function drawChart() {
@@ -903,205 +956,245 @@ function drawChart() {
   const W = canvas.offsetWidth;
   const H = canvas.offsetHeight;
   if (W === 0 || H === 0) return;
-  const data = chartData[currentTicker] || [];
-  const padL = 60, padR = 20, padT = 20, padB = 40;
-  const chartW = W - padL - padR;
-  const chartH = H - padT - padB;
+
+  const data = chartData[currentCoin] || [];
+  const padL = 72, padR = 8, padT = 16, padB = 36;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
 
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#0a0c0f';
   ctx.fillRect(0, 0, W, H);
 
-  if (data.length < 2) return;
-  const visible = data.slice(-80);
-  const highs = visible.map(c => c.high);
-  const lows = visible.map(c => c.low);
-  const maxP = Math.max(...highs);
-  const minP = Math.min(...lows);
-  const pRange = maxP - minP || 1;
-
-  const toY = p => padT + chartH - ((p - minP) / pRange) * chartH;
-  const cw = chartW / visible.length;
-  const cPad = Math.max(1, cw * 0.15);
-
-  // Grid lines
-  ctx.strokeStyle = '#181c22';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = padT + (chartH / 5) * i;
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
-    const price = maxP - (pRange / 5) * i;
-    ctx.fillStyle = '#6b7585';
-    ctx.font = '10px IBM Plex Mono, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(price < 1000 ? price.toFixed(2) : price.toFixed(0), padL - 6, y + 4);
+  if (data.length < 2) {
+    ctx.fillStyle = 'var(--dim, #6b7585)';
+    ctx.font = '13px IBM Plex Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Loading chart data…', W / 2, H / 2);
+    return;
   }
 
-  // Candles
-  visible.forEach((c, i) => {
-    const x = padL + i * cw;
-    const isUp = c.close >= c.open;
-    const color = isUp ? '#00d17a' : '#ff4757';
+  // Only show last 80 candles max for readability
+  const visible = data.slice(-80);
+  const highs = visible.map(c => c.high);
+  const lows  = visible.map(c => c.low);
+  const maxP  = Math.max(...highs);
+  const minP  = Math.min(...lows);
+  const pRange = (maxP - minP) || 1;
 
+  const toY = p => padT + cH - ((p - minP) / pRange) * cH;
+  const cw   = cW / visible.length;
+  const cPad = Math.max(0.5, cw * 0.12);
+
+  // ── Grid lines ──
+  const gridLines = 6;
+  ctx.strokeStyle = '#181c22';
+  ctx.lineWidth   = 1;
+  for (let i = 0; i <= gridLines; i++) {
+    const y = padT + (cH / gridLines) * i;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    const price = maxP - (pRange / gridLines) * i;
+    ctx.fillStyle   = '#6b7585';
+    ctx.font        = '10px IBM Plex Mono, monospace';
+    ctx.textAlign   = 'right';
+    ctx.fillText(fmtPrice(price), padL - 6, y + 3.5);
+  }
+
+  // ── Candles ──
+  visible.forEach((c, i) => {
+    const isUp  = c.close >= c.open;
+    const color = isUp ? '#00d17a' : '#ff4757';
+    const midX  = padL + i * cw + cw / 2;
+
+    // Wick
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    const midX = x + cw / 2;
+    ctx.lineWidth   = 1;
     ctx.beginPath();
     ctx.moveTo(midX, toY(c.high));
     ctx.lineTo(midX, toY(c.low));
     ctx.stroke();
 
+    // Body
     const bodyTop = toY(Math.max(c.open, c.close));
     const bodyBot = toY(Math.min(c.open, c.close));
-    const bodyH = Math.max(bodyBot - bodyTop, 1);
+    const bodyH   = Math.max(bodyBot - bodyTop, 1);
     ctx.fillStyle = isUp ? 'rgba(0,209,122,0.85)' : 'rgba(255,71,87,0.85)';
-    ctx.fillRect(x + cPad, bodyTop, cw - cPad * 2, bodyH);
+    ctx.fillRect(padL + i * cw + cPad, bodyTop, cw - cPad * 2, bodyH);
   });
 
-  // Current price line
-  const lastClose = visible[visible.length - 1].close;
-  const lineY = toY(lastClose);
+  // ── Current price dashed line ──
+  const last   = livePrice[currentCoin] || visible[visible.length - 1].close;
+  const lineY  = toY(Math.min(Math.max(last, minP), maxP));
   ctx.setLineDash([4, 4]);
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(padL, lineY); ctx.lineTo(W - padR, lineY);
-  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth   = 1;
+  ctx.beginPath(); ctx.moveTo(padL, lineY); ctx.lineTo(W - padR, lineY); ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.fillStyle = '#eef2f8';
-  ctx.font = 'bold 11px IBM Plex Mono, monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(lastClose < 1000 ? lastClose.toFixed(2) : lastClose.toFixed(0), W - padR + 2, lineY + 4);
+  // Price label on right edge
+  ctx.fillStyle   = '#eef2f8';
+  ctx.font        = 'bold 10px IBM Plex Mono, monospace';
+  ctx.textAlign   = 'left';
+  ctx.fillText(fmtPrice(last), W - padR + 2, lineY + 3.5);
 }
 
-// ═══════════════════ SIM HEADER ═══════════════════
-function updateSimHeader() {
-  const data = chartData[currentTicker];
-  const last = data[data.length - 1];
-  const prev = data[data.length - 2] || last;
-  const price = last.close;
-  const chg = price - prev.open;
-  const pct = (chg / prev.open) * 100;
-  document.getElementById('simPrice').textContent = price >= 1000 ? '$' + price.toFixed(2) : '$' + price.toFixed(2);
-  const el = document.getElementById('simChange');
-  el.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + (chg >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
-  el.className = 'price-change ' + (chg >= 0 ? 'up' : 'down');
+// ═══════════════════ HEADER UPDATE ═══════════════════
+function updateSimHeader(priceData) {
+  const price   = priceData ? priceData.usd : (livePrice[currentCoin] || 0);
+  const chgPct  = priceData ? (priceData.usd_24h_change || 0) : 0;
+  const chgAbs  = price * (chgPct / 100);
+  const sym     = COIN_SYMBOLS[currentCoin] || currentCoin.toUpperCase();
+
+  document.getElementById('simPrice').textContent = fmtPrice(price);
+  const chgEl = document.getElementById('simChange');
+  const sign  = chgPct >= 0 ? '+' : '';
+  chgEl.textContent = `${sign}${fmtPrice(chgAbs)} (${sign}${chgPct.toFixed(2)}%)`;
+  chgEl.className   = 'price-change ' + (chgPct >= 0 ? 'up' : 'down');
+
+  // Update trade button label
+  const btn = document.getElementById('tradeBtn');
+  if (btn) btn.textContent = currentSide.toUpperCase() + ' ' + sym;
 }
 
+// ═══════════════════ CHANGE COIN / TIMEFRAME ═══════════════════
 function changeTicker() {
-  currentTicker = document.getElementById('tickerSelect').value;
-  updateSimHeader();
-  updateOrderSummary();
-  drawChart();
-  document.getElementById('tradeBtn').textContent = currentSide.toUpperCase() + ' ' + currentTicker;
+  currentCoin = document.getElementById('tickerSelect').value;
+  clearInterval(refreshTimer);
+  loadCoinData(currentCoin, currentDays, currentInterval);
+  startAutoRefresh();
 }
 
-function setTF(btn, tf) {
+function setTF(btn, days, interval) {
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  chartData[currentTicker] = genCandles(currentTicker, tf === '1m' ? 60 : tf === '5m' ? 80 : tf === '1h' ? 100 : 120);
-  tickerPrices[currentTicker] = chartData[currentTicker][chartData[currentTicker].length - 1].close;
-  updateSimHeader();
-  drawChart();
+  currentDays     = days;
+  currentInterval = interval;
+  loadCoinData(currentCoin, days, interval);
 }
 
-// ═══════════════════ TRADING ═══════════════════
+function startAutoRefresh() {
+  clearInterval(refreshTimer);
+  // Refresh live price every 30s (CoinGecko free tier friendly)
+  refreshTimer = setInterval(async () => {
+    const priceData = await fetchLivePrice(currentCoin);
+    if (priceData) {
+      livePrice[currentCoin] = priceData.usd;
+      updateSimHeader(priceData);
+      updateOrderSummary();
+      updatePortfolioSidebar();
+      updatePositionsTable();
+      drawChart();
+      setLiveStatus('live');
+      // Flash the dot green briefly
+      const dot = document.getElementById('liveDot');
+      if (dot) { dot.style.background='#fff'; setTimeout(()=>dot.style.background='var(--green)',300); }
+    }
+  }, 30000);
+}
+
+// ═══════════════════ FORMAT HELPERS ═══════════════════
+function fmtPrice(n) {
+  if (!n && n !== 0) return '—';
+  if (n >= 1000)  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n >= 1)     return '$' + n.toFixed(4);
+  if (n >= 0.01)  return '$' + n.toFixed(5);
+  return '$' + n.toFixed(8);
+}
+function fmt(n) {
+  return '$' + (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function currentPrice() { return livePrice[currentCoin] || 0; }
+
+// ═══════════════════ ORDER PANEL ═══════════════════
 function setSide(side) {
   currentSide = side;
   document.getElementById('tabBuy').classList.toggle('active', side === 'buy');
   document.getElementById('tabSell').classList.toggle('active', side === 'sell');
   const btn = document.getElementById('tradeBtn');
-  btn.className = 'btn-trade ' + side;
-  btn.textContent = side.toUpperCase() + ' ' + currentTicker;
+  btn.className   = 'btn-trade ' + side;
+  const sym = COIN_SYMBOLS[currentCoin] || currentCoin.toUpperCase();
+  btn.textContent = side.toUpperCase() + ' ' + sym;
   updateOrderSummary();
 }
 
-function fmt(n) { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-
 function updateOrderSummary() {
   const price = currentPrice();
-  const qty = parseFloat(document.getElementById('sharesInput').value) || 0;
+  const qty   = parseFloat(document.getElementById('sharesInput').value) || 0;
   const total = price * qty;
-  document.getElementById('ordPrice').textContent = fmt(price);
-  document.getElementById('ordQty').textContent = qty.toFixed(2);
+  document.getElementById('ordPrice').textContent = fmtPrice(price);
+  document.getElementById('ordQty').textContent   = qty.toFixed(6);
   document.getElementById('ordTotal').textContent = fmt(total);
-  document.getElementById('ordCash').textContent = fmt(cash);
+  document.getElementById('ordCash').textContent  = fmt(cash);
 }
 
 function executeTrade() {
   const price = currentPrice();
-  const qty = parseFloat(document.getElementById('sharesInput').value) || 0;
+  if (!price) { showToast('Price not loaded yet', '⚠️'); return; }
+  const qty   = parseFloat(document.getElementById('sharesInput').value) || 0;
   if (qty <= 0) { showToast('Enter a valid quantity', '⚠️'); return; }
   const total = price * qty;
+  const sym   = COIN_SYMBOLS[currentCoin] || currentCoin.toUpperCase();
 
   if (currentSide === 'buy') {
     if (total > cash) { showToast('Not enough cash!', '❌'); return; }
     cash -= total;
-    if (!positions[currentTicker]) positions[currentTicker] = { qty: 0, avgPrice: 0 };
-    const pos = positions[currentTicker];
-    pos.avgPrice = (pos.avgPrice * pos.qty + price * qty) / (pos.qty + qty);
-    pos.qty += qty;
-    showToast(`Bought ${qty} ${currentTicker} @ ${fmt(price)}`, '✅');
+    if (!positions[currentCoin]) positions[currentCoin] = { qty: 0, avgPrice: 0, symbol: sym };
+    const pos     = positions[currentCoin];
+    pos.avgPrice  = (pos.avgPrice * pos.qty + price * qty) / (pos.qty + qty);
+    pos.qty      += qty;
+    showToast(`Bought ${qty.toFixed(4)} ${sym} @ ${fmtPrice(price)}`, '✅');
   } else {
-    const pos = positions[currentTicker];
-    if (!pos || pos.qty < qty) { showToast('Not enough shares to sell!', '❌'); return; }
-    cash += total;
-    pos.qty -= qty;
-    if (pos.qty < 0.0001) delete positions[currentTicker];
-    showToast(`Sold ${qty} ${currentTicker} @ ${fmt(price)}`, '✅');
+    const pos = positions[currentCoin];
+    if (!pos || pos.qty < qty - 0.000001) { showToast('Not enough coins to sell!', '❌'); return; }
+    cash     += total;
+    pos.qty  -= qty;
+    if (pos.qty < 0.000001) delete positions[currentCoin];
+    showToast(`Sold ${qty.toFixed(4)} ${sym} @ ${fmtPrice(price)}`, '✅');
   }
 
-  tradeHistory.unshift({
-    time: new Date().toLocaleTimeString(),
-    ticker: currentTicker,
-    side: currentSide,
-    qty,
-    price,
-    total
-  });
-
+  tradeHistory.unshift({ time: new Date().toLocaleTimeString(), ticker: sym, side: currentSide, qty, price, total });
   updateNavBalance();
   updatePortfolioSidebar();
   updatePositionsTable();
   renderPortfolioScreen();
 }
 
+// ═══════════════════ PORTFOLIO PANELS ═══════════════════
 function updateNavBalance() {
   document.getElementById('navBalance').textContent = fmt(cash);
 }
 
 function updatePortfolioSidebar() {
-  let posVal = 0;
-  let pnl = 0;
-  Object.entries(positions).forEach(([t, p]) => {
-    const cur = tickerPrices[t] || p.avgPrice;
-    posVal += cur * p.qty;
-    pnl += (cur - p.avgPrice) * p.qty;
+  let posVal = 0, pnl = 0;
+  Object.entries(positions).forEach(([id, p]) => {
+    const cur  = livePrice[id] || p.avgPrice;
+    posVal    += cur * p.qty;
+    pnl       += (cur - p.avgPrice) * p.qty;
   });
-  document.getElementById('portCash').textContent = fmt(cash);
+  document.getElementById('portCash').textContent   = fmt(cash);
   document.getElementById('portPosVal').textContent = fmt(posVal);
   const pnlEl = document.getElementById('portPnl');
   pnlEl.textContent = fmt(pnl);
-  pnlEl.className = 'stat-val ' + (pnl >= 0 ? 'green' : 'red');
+  pnlEl.className   = 'stat-val ' + (pnl >= 0 ? 'green' : 'red');
 }
 
 function updatePositionsTable() {
-  const body = document.getElementById('positionsBody');
+  const body    = document.getElementById('positionsBody');
   const entries = Object.entries(positions);
   if (!entries.length) {
     body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-size:12px;padding-top:8px">No open positions</td></tr>';
     return;
   }
-  body.innerHTML = entries.map(([t, p]) => {
-    const cur = tickerPrices[t] || p.avgPrice;
-    const pl = (cur - p.avgPrice) * p.qty;
+  body.innerHTML = entries.map(([id, p]) => {
+    const cur     = livePrice[id] || p.avgPrice;
+    const pl      = (cur - p.avgPrice) * p.qty;
     const plClass = pl >= 0 ? 'pos' : 'neg';
-    const plSign = pl >= 0 ? '+' : '';
+    const plSign  = pl >= 0 ? '+' : '';
     return `<tr>
-      <td class="pos-ticker">${t}</td>
-      <td>${p.qty.toFixed(2)}</td>
-      <td>${fmt(p.avgPrice)}</td>
+      <td class="pos-ticker">${p.symbol}</td>
+      <td>${p.qty.toFixed(4)}</td>
+      <td>${fmtPrice(p.avgPrice)}</td>
       <td class="pos-pnl ${plClass}">${plSign}${fmt(pl)}</td>
     </tr>`;
   }).join('');
@@ -1109,18 +1202,18 @@ function updatePositionsTable() {
 
 function renderPortfolioScreen() {
   let posVal = 0, pnl = 0;
-  Object.entries(positions).forEach(([t, p]) => {
-    const cur = tickerPrices[t] || p.avgPrice;
-    posVal += cur * p.qty;
-    pnl += (cur - p.avgPrice) * p.qty;
+  Object.entries(positions).forEach(([id, p]) => {
+    const cur  = livePrice[id] || p.avgPrice;
+    posVal    += cur * p.qty;
+    pnl       += (cur - p.avgPrice) * p.qty;
   });
   const total = cash + posVal;
-  document.getElementById('portTotal').textContent = fmt(total);
-  const gain = total - START_CASH;
+  const gain  = total - START_CASH;
+  document.getElementById('portTotal').textContent   = fmt(total);
   document.getElementById('portTotalSub').textContent = (gain >= 0 ? '+' : '') + fmt(gain) + ' from starting capital';
   const pnlEl = document.getElementById('portPnlBig');
-  pnlEl.textContent = fmt(pnl);
-  pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  pnlEl.textContent  = fmt(pnl);
+  pnlEl.style.color  = pnl >= 0 ? 'var(--green)' : 'var(--red)';
   const hbody = document.getElementById('historyBody');
   if (!tradeHistory.length) {
     hbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding-top:12px">No trades yet — head to the Simulator to start</td></tr>';
@@ -1130,8 +1223,8 @@ function renderPortfolioScreen() {
         <td>${t.time}</td>
         <td style="color:var(--blue)">${t.ticker}</td>
         <td><span class="badge ${t.side}">${t.side.toUpperCase()}</span></td>
-        <td>${t.qty.toFixed(2)}</td>
-        <td>${fmt(t.price)}</td>
+        <td>${t.qty.toFixed(6)}</td>
+        <td>${fmtPrice(t.price)}</td>
         <td>${fmt(t.total)}</td>
       </tr>
     `).join('');
@@ -1142,7 +1235,7 @@ function renderPortfolioScreen() {
 let toastTimer;
 function showToast(msg, icon='✓') {
   clearTimeout(toastTimer);
-  document.getElementById('toastMsg').textContent = msg;
+  document.getElementById('toastMsg').textContent  = msg;
   document.getElementById('toastIcon').textContent = icon;
   const el = document.getElementById('toast');
   el.classList.add('show');
@@ -1156,7 +1249,9 @@ function showScreen(name) {
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
     t.classList.toggle('active', ['learn','sim','portfolio','glossary'][i] === name);
   });
-  if (name === 'sim') { setTimeout(() => { resizeChart(); drawChart(); }, 50); }
+  if (name === 'sim') {
+    setTimeout(() => { resizeChart(); drawChart(); }, 50);
+  }
   if (name === 'portfolio') { renderPortfolioScreen(); }
 }
 
@@ -1180,12 +1275,7 @@ const lessons = [
       <h3>What moves prices?</h3>
       <p>Supply and demand. If more people want to buy a stock than sell it, the price goes up. Earnings reports, news, economic data, and even social media sentiment all affect how people feel about a stock — and that moves the price.</p>
     `,
-    quiz: {
-      q: 'If you buy 10 shares of a company at $50 each, and the price rises to $70, what is your total gain?',
-      opts: ['$20', '$200', '$700', '$500'],
-      answer: 1,
-      explain: 'Correct! ($70 - $50) × 10 shares = $200 total gain.'
-    }
+    quiz: { q: 'If you buy 10 shares at $50 each, and the price rises to $70, what is your total gain?', opts: ['$20','$200','$700','$500'], answer: 1, explain: 'Correct! ($70 - $50) × 10 shares = $200 total gain.' }
   },
   {
     tag: 'Foundations · Lesson 2',
@@ -1200,16 +1290,11 @@ const lessons = [
         <li><strong style="color:var(--bright)">NASDAQ:</strong> Tech-heavy. Apple, Microsoft, Amazon, Tesla, NVIDIA are all here. Known for growth stocks and higher volatility.</li>
       </ul>
       <h3>How does a trade actually happen?</h3>
-      <p>When you click "buy 1 share of Apple," your order goes to a <strong style="color:var(--bright)">broker</strong> (like Robinhood or TD Ameritrade), who sends it to the exchange. On the exchange, a computer matches your buy order with someone who wants to sell at the same price. Done — you own a share.</p>
+      <p>When you click "buy 1 share of Apple," your order goes to a <strong style="color:var(--bright)">broker</strong>, who sends it to the exchange. A computer matches your buy order with someone who wants to sell at the same price. Done — you own a share.</p>
       <h3>Bid vs Ask</h3>
-      <p>The <strong style="color:var(--green)">bid</strong> is the highest price someone will pay. The <strong style="color:var(--red)">ask</strong> is the lowest price someone will sell for. The gap between them is called the <strong style="color:var(--bright)">spread</strong>. Liquid stocks like Apple have tiny spreads (1-2 cents). Obscure small-cap stocks can have much wider spreads.</p>
+      <p>The <strong style="color:var(--green)">bid</strong> is the highest price someone will pay. The <strong style="color:var(--red)">ask</strong> is the lowest price someone will sell for. The gap is called the <strong style="color:var(--bright)">spread</strong>.</p>
     `,
-    quiz: {
-      q: 'NASDAQ is known primarily for which type of companies?',
-      opts: ['Oil and energy companies', 'Technology companies', 'Foreign companies', 'Real estate companies'],
-      answer: 1,
-      explain: 'Right! NASDAQ is famous for tech giants like Apple, Microsoft, and NVIDIA.'
-    }
+    quiz: { q: 'NASDAQ is known primarily for which type of companies?', opts: ['Oil and energy','Technology companies','Foreign companies','Real estate'], answer: 1, explain: 'Right! NASDAQ is famous for tech giants like Apple, Microsoft, and NVIDIA.' }
   },
   {
     tag: 'Foundations · Lesson 3',
@@ -1217,19 +1302,16 @@ const lessons = [
     desc: 'The most important skill in technical trading.',
     body: `
       <h3>Why candlesticks?</h3>
-      <p>A candlestick packs 4 pieces of data into one shape: the <strong style="color:var(--bright)">open, close, high, and low</strong> price for a given time period (1 minute, 1 hour, 1 day — your choice). They were invented by Japanese rice traders in the 1700s and are still the standard today.</p>
+      <p>A candlestick packs 4 pieces of data into one shape: the <strong style="color:var(--bright)">open, close, high, and low</strong> price for a given time period. They were invented by Japanese rice traders in the 1700s.</p>
       <div class="candle-explainer">
         <div class="candle-svg-wrap">
           <svg width="120" height="200" viewBox="0 0 120 200">
-            <!-- Green candle -->
             <line x1="30" y1="10" x2="30" y2="40" stroke="#00d17a" stroke-width="2"/>
             <rect x="18" y="40" width="24" height="80" fill="#00d17a" rx="2"/>
             <line x1="30" y1="120" x2="30" y2="155" stroke="#00d17a" stroke-width="2"/>
-            <!-- Red candle -->
             <line x1="85" y1="20" x2="85" y2="50" stroke="#ff4757" stroke-width="2"/>
             <rect x="73" y="50" width="24" height="80" fill="#ff4757" rx="2"/>
             <line x1="85" y1="130" x2="85" y2="170" stroke="#ff4757" stroke-width="2"/>
-            <!-- labels -->
             <text x="50" y="15" fill="#6b7585" font-size="10" font-family="monospace">High</text>
             <text x="50" y="85" fill="#6b7585" font-size="10" font-family="monospace">Body</text>
             <text x="50" y="152" fill="#6b7585" font-size="10" font-family="monospace">Low</text>
@@ -1238,26 +1320,19 @@ const lessons = [
         <div class="candle-annotations">
           <div class="row"><div class="dot" style="background:#00d17a"></div><strong style="color:var(--bright)">Green candle</strong> = price went UP</div>
           <div class="row"><div class="dot" style="background:#ff4757"></div><strong style="color:var(--bright)">Red candle</strong> = price went DOWN</div>
-          <div class="row"><div class="dot" style="background:var(--dim)"></div><strong>Body</strong> = distance between open and close</div>
-          <div class="row"><div class="dot" style="background:var(--dim)"></div><strong>Wick / Shadow</strong> = highest and lowest price reached</div>
-          <div class="row"><div class="dot" style="background:var(--green)"></div><strong>Green body:</strong> closed HIGHER than open</div>
-          <div class="row"><div class="dot" style="background:var(--red)"></div><strong>Red body:</strong> closed LOWER than open</div>
+          <div class="row"><div class="dot" style="background:var(--dim)"></div><strong>Body</strong> = open to close distance</div>
+          <div class="row"><div class="dot" style="background:var(--dim)"></div><strong>Wick</strong> = highest and lowest price reached</div>
         </div>
       </div>
       <h3>Common patterns</h3>
       <ul>
-        <li><strong style="color:var(--bright)">Doji:</strong> Open and close are almost the same. The market is undecided.</li>
-        <li><strong style="color:var(--bright)">Hammer:</strong> Long bottom wick, small body on top. Buyers stepped in hard — possible reversal upward.</li>
-        <li><strong style="color:var(--bright)">Shooting Star:</strong> Long top wick, small body on bottom. Sellers crushed a rally — possible reversal downward.</li>
-        <li><strong style="color:var(--bright)">Engulfing:</strong> One candle completely "swallows" the previous one. Strong signal in the direction of the engulfer.</li>
+        <li><strong style="color:var(--bright)">Doji:</strong> Open ≈ Close. Market is undecided.</li>
+        <li><strong style="color:var(--bright)">Hammer:</strong> Long bottom wick — buyers stepped in hard. Possible reversal up.</li>
+        <li><strong style="color:var(--bright)">Shooting Star:</strong> Long top wick — sellers crushed a rally. Possible reversal down.</li>
+        <li><strong style="color:var(--bright)">Engulfing:</strong> One candle swallows the previous one. Strong directional signal.</li>
       </ul>
     `,
-    quiz: {
-      q: 'A green candlestick means:',
-      opts: ['The stock is profitable', 'The price closed higher than it opened', 'More people bought than sold', 'The stock hit a new all-time high'],
-      answer: 1,
-      explain: 'Correct! Green = close > open. The body shows you exactly how much it moved.'
-    }
+    quiz: { q: 'A green candlestick means:', opts: ['The stock is profitable','The price closed higher than it opened','More people bought than sold','New all-time high'], answer: 1, explain: 'Correct! Green = close > open. The body shows exactly how much it moved.' }
   },
   {
     tag: 'Trading Skills · Lesson 4',
@@ -1265,20 +1340,13 @@ const lessons = [
     desc: 'Know exactly how your orders get filled.',
     body: `
       <h3>Market Orders</h3>
-      <p>A <strong style="color:var(--bright)">market order</strong> says "buy/sell RIGHT NOW at whatever the current price is." It's fast and guaranteed to fill, but you might get a slightly different price than you expected — especially in fast-moving markets. This is called <strong style="color:var(--yellow)">slippage</strong>.</p>
+      <p>A <strong style="color:var(--bright)">market order</strong> executes immediately at the current price. Fast and guaranteed to fill, but in fast markets you might get a slightly different price — called <strong style="color:var(--yellow)">slippage</strong>.</p>
       <h3>Limit Orders</h3>
-      <p>A <strong style="color:var(--bright)">limit order</strong> lets you set the exact price you're willing to pay (or accept). If the stock never reaches that price, your order doesn't fill. Limit orders give you control — market orders give you speed.</p>
+      <p>A <strong style="color:var(--bright)">limit order</strong> only fills at your specified price or better. If the price never reaches it, the order stays open. More control, less certainty.</p>
       <h3>Stop Loss Orders</h3>
-      <p>A <strong style="color:var(--red)">stop loss</strong> automatically sells your position if the price falls to a certain level. Example: You buy Tesla at $250. You set a stop loss at $230. If Tesla crashes to $230, it sells automatically — protecting you from bigger losses. This is one of the most important tools for risk management.</p>
-      <h3>Stop Limit Orders</h3>
-      <p>Like a stop loss, but instead of turning into a market order, it turns into a limit order. More control, but the risk is it won't fill if the stock gaps past your limit price.</p>
+      <p>A <strong style="color:var(--red)">stop loss</strong> automatically sells your position if price falls to a set level. If you buy BTC at $67,000 and set a stop loss at $63,000, it sells automatically if BTC drops that far — protecting you from bigger losses.</p>
     `,
-    quiz: {
-      q: 'You want to buy NVDA only if it drops to $450. What type of order should you use?',
-      opts: ['Market order', 'Limit buy order at $450', 'Stop loss at $450', 'Dividend order'],
-      answer: 1,
-      explain: 'A limit buy order at $450 tells the exchange: "Only buy if the price hits $450 or lower."'
-    }
+    quiz: { q: 'You want to buy ETH only if it drops to $3,000. What order do you use?', opts: ['Market order','Limit buy at $3,000','Stop loss at $3,000','Dividend order'], answer: 1, explain: 'A limit buy at $3,000 says: only fill this if price hits $3,000 or lower.' }
   },
   {
     tag: 'Trading Skills · Lesson 5',
@@ -1286,25 +1354,18 @@ const lessons = [
     desc: 'Identify price floors and ceilings on any chart.',
     body: `
       <h3>What is Support?</h3>
-      <p><strong style="color:var(--green)">Support</strong> is a price level where the stock has bounced up multiple times. It's a "floor" — buyers keep stepping in at that price, which prevents it from falling further. The more times a level has been tested and held, the stronger the support.</p>
+      <p><strong style="color:var(--green)">Support</strong> is a price level where the asset has bounced upward multiple times. Buyers keep stepping in there, preventing it from falling further. The more it holds, the stronger the support.</p>
       <h3>What is Resistance?</h3>
-      <p><strong style="color:var(--red)">Resistance</strong> is a price level the stock keeps struggling to break through. It acts like a "ceiling." Sellers tend to unload shares at that price, pushing it back down.</p>
+      <p><strong style="color:var(--red)">Resistance</strong> is a price level the asset keeps struggling to break above. Sellers unload there, pushing it back down.</p>
       <h3>Breakouts</h3>
-      <p>When a stock breaks through resistance with high volume, that old resistance often becomes new support. This is called a <strong style="color:var(--bright)">breakout</strong> and is one of the most traded setups in technical analysis.</p>
-      <h3>How traders use this</h3>
+      <p>When price breaks through resistance with high volume, that old resistance often becomes new support. This is a <strong style="color:var(--bright)">breakout</strong> — one of the most traded setups in crypto and stocks.</p>
       <ul>
-        <li>Buy near support, set stop loss just below it</li>
+        <li>Buy near support, stop loss just below it</li>
         <li>Take profits near resistance</li>
-        <li>Watch for breakouts above resistance to enter long positions</li>
-        <li>Watch for breakdowns below support to exit or go short</li>
+        <li>Watch for high-volume breakouts to enter new positions</li>
       </ul>
     `,
-    quiz: {
-      q: 'A stock bounces off $100 three times over 6 months. What is $100 considered?',
-      opts: ['A resistance level', 'A support level', 'A breakout point', 'The stock\'s fair value'],
-      answer: 1,
-      explain: 'A price that repeatedly holds and bounces upward is a strong support level.'
-    }
+    quiz: { q: 'BTC bounces off $60,000 three times over 2 months. What is $60,000?', opts: ['A resistance level','A support level','A breakout point','Fair value'], answer: 1, explain: 'A price that repeatedly holds and bounces upward is a strong support level.' }
   },
   {
     tag: 'Trading Skills · Lesson 6',
@@ -1312,22 +1373,15 @@ const lessons = [
     desc: 'How to survive long enough to become a good trader.',
     body: `
       <h3>The #1 rule of trading</h3>
-      <p>Don't lose all your money. Sounds obvious, but most new traders blow up their accounts before they ever get good. Risk management is what keeps you in the game long enough to learn.</p>
+      <p>Don't lose all your money. Most new traders blow up their accounts before they get good. Risk management keeps you in the game long enough to learn.</p>
       <h3>The 1% Rule</h3>
-      <p>Never risk more than 1–2% of your total account on a single trade. If you have $10,000, that means you only risk $100–$200 per trade. A losing streak won't wipe you out.</p>
+      <p>Never risk more than 1–2% of your account on a single trade. With $10,000, that's $100–$200 max per trade. A losing streak won't wipe you out.</p>
       <h3>Risk/Reward Ratio</h3>
-      <p>Before entering a trade, ask: "How much could I lose vs how much could I gain?" A good ratio is at least <strong style="color:var(--bright)">1:2</strong> — you risk $1 to potentially make $2. If you're right 50% of the time with a 1:2 ratio, you're profitable.</p>
-      <h3>Position Sizing</h3>
-      <p>Say your stop loss is $5 below your entry and you're willing to risk $100. That means you can buy: $100 / $5 = 20 shares. Position sizing is how you control risk automatically.</p>
-      <h3>Emotions are the enemy</h3>
-      <p><strong style="color:var(--yellow)">Never revenge trade.</strong> Taking a big loss and immediately trying to "win it back" with a bigger trade is how traders blow up. Every trade is independent.</p>
+      <p>Before any trade, ask: how much can I lose vs how much can I gain? A good minimum is <strong style="color:var(--bright)">1:2</strong> — risk $1 to potentially make $2. If you're right 50% of the time, you're profitable.</p>
+      <h3>Never revenge trade</h3>
+      <p style="color:var(--yellow)">Taking a big loss and immediately trying to "win it back" with a bigger trade is how traders blow up. Every trade is independent.</p>
     `,
-    quiz: {
-      q: 'You have a $5,000 account and follow the 1% rule. What is the max you should risk per trade?',
-      opts: ['$500', '$50', '$5', '$100'],
-      answer: 1,
-      explain: '1% of $5,000 = $50. This keeps any single trade from doing major damage.'
-    }
+    quiz: { q: 'You have $5,000 and follow the 1% rule. Max risk per trade?', opts: ['$500','$50','$5','$100'], answer: 1, explain: '1% of $5,000 = $50. This keeps any single trade from doing major damage.' }
   },
   {
     tag: 'Crypto & Forex · Lesson 7',
@@ -1335,25 +1389,19 @@ const lessons = [
     desc: 'How Bitcoin, Ethereum, and crypto markets work.',
     body: `
       <h3>What is cryptocurrency?</h3>
-      <p>Crypto is digital money that runs on a <strong style="color:var(--bright)">blockchain</strong> — a public ledger that records every transaction without needing a bank. No single company or government controls it.</p>
+      <p>Crypto is digital money running on a <strong style="color:var(--bright)">blockchain</strong> — a public ledger that records every transaction without a bank. No single company or government controls it.</p>
       <h3>Bitcoin (BTC)</h3>
-      <p>The original. Created in 2009 by an anonymous person or group named Satoshi Nakamoto. There will only ever be 21 million Bitcoin — this limited supply is why people treat it like "digital gold." Think of it as a store of value more than a currency people spend daily.</p>
+      <p>The original. Created in 2009. Only 21 million will ever exist — making it scarce like gold. Most people treat it as a store of value, not a daily-use currency.</p>
       <h3>Ethereum (ETH)</h3>
-      <p>More than just money — Ethereum is a programmable blockchain. It runs <strong style="color:var(--bright)">smart contracts</strong>: self-executing code that powers DeFi apps, NFTs, and thousands of other crypto projects. Think of Bitcoin as gold, Ethereum as the internet it runs on.</p>
+      <p>More than money — it's a programmable blockchain running <strong style="color:var(--bright)">smart contracts</strong>: self-executing code powering DeFi, NFTs, and thousands of apps. Think of BTC as gold, ETH as the internet it runs on.</p>
       <h3>Why is crypto so volatile?</h3>
       <ul>
-        <li>Small market compared to stocks — big money moving in or out swings prices hard</li>
-        <li>Trades 24/7, including weekends (unlike stocks)</li>
+        <li>Smaller market than stocks — big money in/out swings prices hard</li>
+        <li>Trades 24/7, including weekends</li>
         <li>Driven heavily by sentiment, news, and speculation</li>
-        <li>Regulatory uncertainty still spooks investors</li>
       </ul>
     `,
-    quiz: {
-      q: 'Unlike stocks, crypto markets trade:',
-      opts: ['9:30am–4pm EST, Mon–Fri', '24 hours a day, 7 days a week', 'Only on weekends', 'Only on NASDAQ'],
-      answer: 1,
-      explain: 'Crypto never closes. It trades around the clock, every day of the year.'
-    }
+    quiz: { q: 'Unlike stocks, crypto markets trade:', opts: ['9:30am–4pm EST Mon–Fri','24 hours a day, 7 days a week','Only on weekends','Only on NASDAQ'], answer: 1, explain: 'Crypto never closes. It trades around the clock, every day of the year.' }
   },
   {
     tag: 'Advanced · Lesson 8',
@@ -1361,24 +1409,17 @@ const lessons = [
     desc: 'The most common strategies used by active day traders.',
     body: `
       <h3>What is day trading?</h3>
-      <p>Day trading means opening and closing all positions within the same trading day. No overnight holds. You profit from small, short-term price movements using high volume and often leverage.</p>
+      <p>Opening and closing all positions within the same trading day. You profit from short-term price moves using high volume and sometimes leverage.</p>
       <h3>Scalping</h3>
-      <p>Taking dozens of tiny trades per day, each lasting seconds to minutes. Profit per trade is tiny ($0.10–$0.50/share), but it adds up with size. Requires fast execution, tight spreads, and laser focus.</p>
+      <p>Dozens of tiny trades per day lasting seconds to minutes. Tiny profit each time, adds up with size. Requires fast execution and laser focus.</p>
       <h3>Momentum Trading</h3>
-      <p>Finding stocks that are moving fast in one direction (usually on news) and riding the wave. The key is getting in early and getting out before the momentum dies. Look for unusual volume and a clear catalyst.</p>
+      <p>Finding assets moving fast in one direction (on news or catalysts) and riding the wave. Get in early, exit before momentum dies.</p>
       <h3>Breakout Trading</h3>
-      <p>Waiting for a stock to break above a key resistance level with high volume, then entering in the direction of the break. Target the next resistance level for profit-taking.</p>
-      <h3>Mean Reversion</h3>
-      <p>The idea that prices eventually return to their average. If a stock spikes way above its normal range, a mean reversion trader bets it'll come back down. Works in range-bound markets, fails badly in strong trends.</p>
+      <p>Wait for price to break above resistance with high volume. Enter in the direction of the break, target next resistance for profit.</p>
       <h3>Warning</h3>
-      <p style="color:var(--yellow)">Studies show 70–80% of day traders lose money. It requires significant capital, discipline, and experience. Practice in the simulator before trading real money.</p>
+      <p style="color:var(--yellow)">Studies show 70–80% of day traders lose money. Practice here first before risking real cash.</p>
     `,
-    quiz: {
-      q: 'A momentum trader would most likely enter a trade when:',
-      opts: ['A stock has been flat for weeks', 'A stock spikes up 8% on high volume after a news release', 'A stock hits its 52-week low', 'Interest rates are rising'],
-      answer: 1,
-      explain: 'Momentum traders look for strong directional moves with volume — news catalysts are a prime trigger.'
-    }
+    quiz: { q: 'A momentum trader most likely enters when:', opts: ['Stock has been flat for weeks','Asset spikes 8% on high volume after news','Asset hits 52-week low','Interest rates rise'], answer: 1, explain: 'Momentum traders want strong directional moves with volume — news catalysts are prime triggers.' }
   }
 ];
 
@@ -1387,9 +1428,7 @@ let currentQuizAnswered = false;
 function loadLesson(index) {
   const l = lessons[index];
   currentQuizAnswered = false;
-  document.querySelectorAll('.lesson-item').forEach((el, i) => {
-    el.classList.toggle('active', i === index);
-  });
+  document.querySelectorAll('.lesson-item').forEach((el, i) => el.classList.toggle('active', i === index));
   const main = document.getElementById('lessonMain');
   main.innerHTML = `
     <div class="lesson-tag">${l.tag}</div>
@@ -1399,13 +1438,13 @@ function loadLesson(index) {
     <div class="quiz-card">
       <div class="quiz-q">🧠 Quick Check: ${l.quiz.q}</div>
       <div class="quiz-options">
-        ${l.quiz.opts.map((o, i) => `<button class="quiz-opt" onclick="answerQuiz(${i}, ${l.quiz.answer}, '${l.quiz.explain.replace(/'/g, "\\'")}', this)">${o}</button>`).join('')}
+        ${l.quiz.opts.map((o, i) => `<button class="quiz-opt" onclick="answerQuiz(${i},${l.quiz.answer},'${l.quiz.explain.replace(/'/g,"\\'")}',this)">${o}</button>`).join('')}
       </div>
       <div class="quiz-feedback" id="qFeedback"></div>
     </div>
     <div class="lesson-nav">
-      ${index > 0 ? `<button class="btn btn-ghost" onclick="loadLesson(${index - 1})">← Previous</button>` : ''}
-      ${index < lessons.length - 1 ? `<button class="btn btn-primary" onclick="loadLesson(${index + 1})">Next Lesson →</button>` : '<button class="btn btn-primary" onclick="showScreen(\'sim\')">🚀 Go Trade!</button>'}
+      ${index > 0 ? `<button class="btn btn-ghost" onclick="loadLesson(${index-1})">← Previous</button>` : ''}
+      ${index < lessons.length-1 ? `<button class="btn btn-primary" onclick="loadLesson(${index+1})">Next Lesson →</button>` : '<button class="btn btn-primary" onclick="showScreen(\'sim\')">🚀 Go Trade!</button>'}
     </div>
   `;
   main.scrollTop = 0;
@@ -1414,42 +1453,36 @@ function loadLesson(index) {
 function answerQuiz(chosen, correct, explain, btn) {
   if (currentQuizAnswered) return;
   currentQuizAnswered = true;
-  const opts = document.querySelectorAll('.quiz-opt');
-  opts.forEach((o, i) => {
+  document.querySelectorAll('.quiz-opt').forEach((o, i) => {
     if (i === correct) o.classList.add('correct');
     else if (i === chosen) o.classList.add('wrong');
     o.disabled = true;
   });
   const fb = document.getElementById('qFeedback');
-  if (chosen === correct) {
-    fb.textContent = '✓ ' + explain;
-    fb.className = 'quiz-feedback show ok';
-  } else {
-    fb.textContent = '✗ Not quite. ' + explain;
-    fb.className = 'quiz-feedback show fail';
-  }
+  fb.textContent = (chosen === correct ? '✓ ' : '✗ Not quite. ') + explain;
+  fb.className = 'quiz-feedback show ' + (chosen === correct ? 'ok' : 'fail');
 }
 
 // ═══════════════════ GLOSSARY ═══════════════════
 const glossaryTerms = [
-  { term: 'Bull Market', def: 'A period when stock prices are rising or expected to rise. "Bulls" are optimists who expect prices to go up.', tag: 'Markets' },
-  { term: 'Bear Market', def: 'A period of falling stock prices, typically defined as a 20%+ drop from recent highs. "Bears" expect prices to fall.', tag: 'Markets' },
-  { term: 'Volatility', def: 'How much a price swings up and down. High volatility = big moves in short time. Measured by indicators like the VIX.', tag: 'Risk' },
-  { term: 'Market Cap', def: 'Total value of a company\'s stock. Share price × total shares outstanding. Apple\'s is ~$3 trillion.', tag: 'Fundamentals' },
-  { term: 'P/E Ratio', def: 'Price-to-Earnings ratio. How much investors pay for each $1 of earnings. High P/E = expensive or high-growth expectations.', tag: 'Fundamentals' },
-  { term: 'Volume', def: 'Number of shares traded in a given period. High volume confirms a price move. Low volume moves are less reliable.', tag: 'Technical' },
-  { term: 'Moving Average', def: 'The average price over a set number of periods (e.g. 50-day MA). Smooths out noise and shows trend direction.', tag: 'Technical' },
-  { term: 'RSI', def: 'Relative Strength Index. 0–100 scale. Above 70 = overbought (might fall). Below 30 = oversold (might rise).', tag: 'Indicators' },
-  { term: 'MACD', def: 'Moving Average Convergence Divergence. Shows momentum. When the MACD line crosses above signal line, bullish signal.', tag: 'Indicators' },
-  { term: 'Short Selling', def: 'Betting a stock will fall. You borrow shares, sell them, hope price drops, buy back cheaper, return shares, pocket difference.', tag: 'Strategies' },
-  { term: 'Leverage', def: 'Borrowing money to trade with more than you have. Amplifies both gains AND losses. $1,000 with 10x leverage = $10,000 exposure.', tag: 'Risk' },
-  { term: 'Liquidity', def: 'How easily you can buy or sell without moving the price. Apple is highly liquid. A tiny penny stock is illiquid.', tag: 'Markets' },
-  { term: 'Spread', def: 'The gap between the bid (buy) price and ask (sell) price. Tight spread = easy/cheap to trade. Wide spread = costly.', tag: 'Markets' },
-  { term: 'Margin', def: 'Borrowing money from your broker to buy more stock than you can afford with cash. Comes with interest and risk of margin calls.', tag: 'Risk' },
-  { term: 'ETF', def: 'Exchange-Traded Fund. A basket of stocks you buy as one share. SPY tracks the S&P 500 (top 500 US companies).', tag: 'Products' },
-  { term: 'Options', def: 'Contracts giving you the right (not obligation) to buy or sell a stock at a set price before a set date. High leverage, high risk.', tag: 'Products' },
-  { term: 'Dividend', def: 'Cash paid to shareholders, usually quarterly. Example: owning 100 shares of a stock paying $0.25/quarter = $100/year.', tag: 'Fundamentals' },
-  { term: 'Portfolio', def: 'Your total collection of investments. Diversification across multiple assets reduces risk.', tag: 'General' },
+  { term:'Bull Market', def:'A period when prices are rising or expected to rise. "Bulls" are optimists.', tag:'Markets' },
+  { term:'Bear Market', def:'A period of falling prices — typically a 20%+ drop from recent highs.', tag:'Markets' },
+  { term:'Volatility', def:'How much a price swings up and down. High volatility = big moves in short time.', tag:'Risk' },
+  { term:'Market Cap', def:'Total value of all coins/shares. Price × total supply. Bitcoin\'s is ~$1.3 trillion.', tag:'Fundamentals' },
+  { term:'Volume', def:'Number of units traded in a period. High volume confirms a price move.', tag:'Technical' },
+  { term:'Moving Average', def:'Average price over a set number of periods. Smooths noise and shows trend direction.', tag:'Technical' },
+  { term:'RSI', def:'Relative Strength Index. 0–100 scale. Above 70 = overbought. Below 30 = oversold.', tag:'Indicators' },
+  { term:'MACD', def:'Moving Average Convergence Divergence. Shows momentum shifts. MACD crossing signal line = trade signal.', tag:'Indicators' },
+  { term:'Short Selling', def:'Betting price will fall. Borrow the asset, sell it, buy back cheaper later, pocket the diff.', tag:'Strategies' },
+  { term:'Leverage', def:'Borrowing to trade bigger than your balance. Amplifies both gains AND losses.', tag:'Risk' },
+  { term:'Liquidity', def:'How easily you can buy/sell without moving the price. BTC is very liquid. Micro-cap coins are not.', tag:'Markets' },
+  { term:'Spread', def:'Gap between bid (buy) and ask (sell) price. Tight spread = cheap to trade.', tag:'Markets' },
+  { term:'ETF', def:'Exchange-Traded Fund. A basket you buy as one share. SPY = S&P 500 top 500 companies.', tag:'Products' },
+  { term:'DeFi', def:'Decentralized Finance. Financial services running on blockchain without banks. Powered mainly by Ethereum.', tag:'Crypto' },
+  { term:'Blockchain', def:'A public ledger where every transaction is permanently recorded. Immutable and transparent.', tag:'Crypto' },
+  { term:'Altcoin', def:'Any cryptocurrency that is not Bitcoin. ETH, SOL, DOGE, ADA etc. are all altcoins.', tag:'Crypto' },
+  { term:'Stablecoin', def:'Crypto pegged to a real currency (usually USD). USDT, USDC hold ~$1 value. Used to park funds.', tag:'Crypto' },
+  { term:'Portfolio', def:'Your total collection of investments. Diversifying across assets reduces risk.', tag:'General' },
 ];
 
 function renderGlossary() {
@@ -1468,10 +1501,13 @@ loadLesson(0);
 window.addEventListener('load', () => {
   setTimeout(() => {
     initChart();
-    updateSimHeader();
-    updateOrderSummary();
+    // Load real data as soon as simulator is ready
+    loadCoinData(currentCoin, currentDays, currentInterval).then(() => {
+      startAutoRefresh();
+    });
   }, 200);
 });
 </script>
+
 </body>
 </html>
