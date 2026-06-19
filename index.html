@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradeIQ — Learn & Trade</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:        #0a0c0f;
+    --surface:   #111418;
+    --panel:     #181c22;
+    --border:    #232930;
+    --muted:     #3a424f;
+    --dim:       #6b7585;
+    --text:      #cdd5e0;
+    --bright:    #eef2f8;
+    --green:     #00d17a;
+    --red:       #ff4757;
+    --blue:      #3d8ef8;
+    --yellow:    #f5c518;
+    --purple:    #a78bfa;
+    --accent:    #00d17a;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── NAV ── */
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 0 20px;
+    height: 52px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--green);
+    letter-spacing: -0.5px;
+    margin-right: 8px;
+  }
+  .logo span { color: var(--bright); }
+  .nav-tabs { display: flex; gap: 2px; }
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--dim);
+    border: none;
+    background: none;
+    transition: all 0.15s;
+    font-family: var(--sans);
+  }
+  .nav-tab:hover { color: var(--text); background: var(--panel); }
+  .nav-tab.active { color: var(--green); background: rgba(0,209,122,0.08); }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+  .balance-badge {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--bright);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 4px;
+  }
+  .balance-badge span { color: var(--green); }
+
+  /* ── SCREENS ── */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* ── HOME / LEARN SCREEN ── */
+  .learn-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: calc(100vh - 52px);
+  }
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 20px 0;
+    position: sticky;
+    top: 52px;
+    height: calc(100vh - 52px);
+    overflow-y: auto;
+  }
+  .sidebar-section {
+    padding: 0 16px;
+    margin-bottom: 24px;
+  }
+  .sidebar-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+    padding: 0 4px;
+  }
+  .lesson-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-bottom: 2px;
+  }
+  .lesson-item:hover { background: var(--panel); }
+  .lesson-item.active { background: rgba(0,209,122,0.08); }
+  .lesson-item.done .lesson-icon { background: var(--green); color: var(--bg); }
+  .lesson-icon {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--dim);
+    flex-shrink: 0;
+  }
+  .lesson-meta { flex: 1; }
+  .lesson-title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .lesson-sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .lesson-item.locked { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── LESSON CONTENT ── */
+  .lesson-content {
+    padding: 40px 48px;
+    max-width: 800px;
+  }
+  .lesson-tag {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--blue);
+    margin-bottom: 10px;
+  }
+  .lesson-h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--bright);
+    line-height: 1.25;
+    margin-bottom: 8px;
+  }
+  .lesson-desc {
+    color: var(--dim);
+    font-size: 14px;
+    margin-bottom: 32px;
+    line-height: 1.6;
+  }
+  .lesson-body {
+    line-height: 1.75;
+    color: var(--text);
+    font-size: 15px;
+  }
+  .lesson-body h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--bright);
+    margin: 28px 0 10px;
+  }
+  .lesson-body p { margin-bottom: 16px; }
+  .lesson-body ul { margin: 0 0 16px 20px; }
+  .lesson-body li { margin-bottom: 6px; }
+
+  /* Candlestick visual explainer */
+  .candle-explainer {
+    display: flex;
+    gap: 40px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px 32px;
+    margin: 24px 0;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .candle-svg-wrap { flex-shrink: 0; }
+  .candle-annotations { flex: 1; min-width: 200px; }
+  .candle-annotations .row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  /* Quiz */
+  .quiz-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-top: 32px;
+  }
+  .quiz-q {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--bright);
+    margin-bottom: 16px;
+  }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt {
+    padding: 12px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text);
+    text-align: left;
+    transition: all 0.15s;
+    font-family: var(--sans);
+  }
+  .quiz-opt:hover { border-color: var(--blue); color: var(--bright); }
+  .quiz-opt.correct { border-color: var(--green); background: rgba(0,209,122,0.08); color: var(--green); }
+  .quiz-opt.wrong { border-color: var(--red); background: rgba(255,71,87,0.08); color: var(--red); }
+  .quiz-feedback {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    display: none;
+  }
+  .quiz-feedback.show { display: block; }
+  .quiz-feedback.ok { background: rgba(0,209,122,0.08); color: var(--green); border: 1px solid rgba(0,209,122,0.2); }
+  .quiz-feedback.fail { background: rgba(255,71,87,0.08); color: var(--red); border: 1px solid rgba(255,71,87,0.2); }
+
+  .lesson-nav {
+    display: flex;
+    gap: 12px;
+    margin-top: 36px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .btn {
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    font-family: var(--sans);
+    transition: all 0.15s;
+  }
+  .btn-primary { background: var(--green); color: var(--bg); }
+  .btn-primary:hover { background: #00f090; }
+  .btn-ghost { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--text); color: var(--bright); }
+
+  /* ── SIMULATOR SCREEN ── */
+  .sim-layout {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    grid-template-rows: auto 1fr;
+    min-height: calc(100vh - 52px);
+  }
+  .sim-header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .ticker-select {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    padding: 7px 12px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 14px;
+    cursor: pointer;
+    outline: none;
+  }
+  .ticker-select:focus { border-color: var(--blue); }
+  .price-display {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--bright);
+  }
+  .price-change {
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+  .price-change.up { color: var(--green); background: rgba(0,209,122,0.1); }
+  .price-change.down { color: var(--red); background: rgba(255,71,87,0.1); }
+  .tf-btns { display: flex; gap: 2px; margin-left: auto; }
+  .tf-btn {
+    padding: 5px 10px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: var(--dim);
+    transition: all 0.12s;
+  }
+  .tf-btn:hover { color: var(--text); background: var(--panel); }
+  .tf-btn.active { color: var(--bright); background: var(--panel); border: 1px solid var(--border); }
+
+  /* Chart */
+  .chart-area {
+    background: var(--bg);
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  canvas#chartCanvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Trade panel */
+  .trade-panel {
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .panel-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .side-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .side-tab {
+    flex: 1;
+    padding: 8px;
+    text-align: center;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--dim);
+    transition: all 0.15s;
+    font-family: var(--sans);
+  }
+  .side-tab.buy.active { background: rgba(0,209,122,0.12); border-color: var(--green); color: var(--green); }
+  .side-tab.sell.active { background: rgba(255,71,87,0.12); border-color: var(--red); color: var(--red); }
+  .input-group { margin-bottom: 12px; }
+  .input-label {
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 5px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .trade-input {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    padding: 9px 12px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 14px;
+    outline: none;
+  }
+  .trade-input:focus { border-color: var(--blue); }
+  .order-summary {
+    background: var(--panel);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .order-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .order-row:last-child { margin-bottom: 0; }
+  .order-row span:last-child {
+    font-family: var(--mono);
+    color: var(--text);
+  }
+  .btn-trade {
+    width: 100%;
+    padding: 12px;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    font-family: var(--sans);
+    transition: all 0.15s;
+  }
+  .btn-trade.buy { background: var(--green); color: var(--bg); }
+  .btn-trade.buy:hover { background: #00f090; }
+  .btn-trade.sell { background: var(--red); color: #fff; }
+  .btn-trade.sell:hover { background: #ff6070; }
+
+  /* Portfolio */
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { font-size: 12px; color: var(--dim); }
+  .stat-val { font-family: var(--mono); font-size: 13px; color: var(--bright); }
+  .stat-val.green { color: var(--green); }
+  .stat-val.red { color: var(--red); }
+
+  /* Positions table */
+  .positions-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .positions-table th {
+    text-align: left;
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 0 0 8px;
+  }
+  .positions-table td {
+    padding: 7px 0;
+    border-top: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .pos-ticker { color: var(--blue); font-weight: 600; }
+  .pos-pnl.pos { color: var(--green); }
+  .pos-pnl.neg { color: var(--red); }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 12px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--bright);
+    opacity: 0;
+    transform: translateY(12px);
+    transition: all 0.25s;
+    pointer-events: none;
+    z-index: 999;
+    display: flex; align-items: center; gap: 10px;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast .toast-icon { font-size: 16px; }
+
+  /* Glossary screen */
+  .glossary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    padding: 32px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .glossary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    transition: border-color 0.15s;
+  }
+  .glossary-card:hover { border-color: var(--muted); }
+  .glossary-term {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--blue);
+    margin-bottom: 6px;
+  }
+  .glossary-def { font-size: 13px; color: var(--dim); line-height: 1.6; }
+  .glossary-tag {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: var(--panel);
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  /* Portfolio screen */
+  .portfolio-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 28px;
+    max-width: 1000px;
+  }
+  .port-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .port-card.full { grid-column: 1 / -1; }
+  .port-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .big-num {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--bright);
+  }
+  .big-sub { font-size: 13px; color: var(--dim); margin-top: 4px; }
+  .trade-history { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .trade-history th {
+    text-align: left;
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding-bottom: 10px;
+  }
+  .trade-history td {
+    padding: 9px 0;
+    border-top: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--sans);
+  }
+  .badge.buy { background: rgba(0,209,122,0.12); color: var(--green); }
+  .badge.sell { background: rgba(255,71,87,0.12); color: var(--red); }
+
+  @media (max-width: 700px) {
+    .learn-grid { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .sim-layout { grid-template-columns: 1fr; }
+    .trade-panel { border-left: none; border-top: 1px solid var(--border); }
+    .lesson-content { padding: 24px 20px; }
+    .portfolio-layout { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Trade<span>IQ</span></div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showScreen('learn')">📚 Learn</button>
+    <button class="nav-tab" onclick="showScreen('sim')">📈 Simulator</button>
+    <button class="nav-tab" onclick="showScreen('portfolio')">💼 Portfolio</button>
+    <button class="nav-tab" onclick="showScreen('glossary')">📖 Glossary</button>
+  </div>
+  <div class="nav-right">
+    <div class="balance-badge">Cash: <span id="navBalance">$10,000.00</span></div>
+  </div>
+</nav>
+
+<!-- ══════════════════════════ LEARN SCREEN ══════════════════════════ -->
+<div id="screen-learn" class="screen active">
+  <div class="learn-grid">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Foundations</div>
+        <div class="lesson-item active done" onclick="loadLesson(0)">
+          <div class="lesson-icon">✓</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">What is a Stock?</div>
+            <div class="lesson-sub">Markets · 3 min</div>
+          </div>
+        </div>
+        <div class="lesson-item" onclick="loadLesson(1)">
+          <div class="lesson-icon">2</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">How Markets Work</div>
+            <div class="lesson-sub">NASDAQ, NYSE · 4 min</div>
+          </div>
+        </div>
+        <div class="lesson-item" onclick="loadLesson(2)">
+          <div class="lesson-icon">3</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Candlestick Charts</div>
+            <div class="lesson-sub">Reading price · 5 min</div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Trading Skills</div>
+        <div class="lesson-item" onclick="loadLesson(3)">
+          <div class="lesson-icon">4</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Buy vs Sell Orders</div>
+            <div class="lesson-sub">Order types · 4 min</div>
+          </div>
+        </div>
+        <div class="lesson-item" onclick="loadLesson(4)">
+          <div class="lesson-icon">5</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Support & Resistance</div>
+            <div class="lesson-sub">Chart patterns · 5 min</div>
+          </div>
+        </div>
+        <div class="lesson-item" onclick="loadLesson(5)">
+          <div class="lesson-icon">6</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Risk Management</div>
+            <div class="lesson-sub">Stop loss · 4 min</div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Crypto & Forex</div>
+        <div class="lesson-item" onclick="loadLesson(6)">
+          <div class="lesson-icon">7</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Crypto Basics</div>
+            <div class="lesson-sub">BTC, ETH · 4 min</div>
+          </div>
+        </div>
+        <div class="lesson-item" onclick="loadLesson(7)">
+          <div class="lesson-icon">8</div>
+          <div class="lesson-meta">
+            <div class="lesson-title">Day Trading Strategies</div>
+            <div class="lesson-sub">Advanced · 6 min</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main id="lessonMain" class="lesson-content"></main>
+  </div>
+</div>
+
+<!-- ══════════════════════════ SIMULATOR SCREEN ══════════════════════ -->
+<div id="screen-sim" class="screen">
+  <div class="sim-layout">
+    <div class="sim-header">
+      <select class="ticker-select" id="tickerSelect" onchange="changeTicker()">
+        <option value="AAPL">AAPL — Apple Inc.</option>
+        <option value="TSLA">TSLA — Tesla Inc.</option>
+        <option value="NVDA">NVDA — NVIDIA Corp.</option>
+        <option value="AMZN">AMZN — Amazon</option>
+        <option value="BTC">BTC — Bitcoin / USD</option>
+        <option value="ETH">ETH — Ethereum / USD</option>
+        <option value="SPY">SPY — S&amp;P 500 ETF</option>
+      </select>
+      <div class="price-display" id="simPrice">$0.00</div>
+      <div class="price-change up" id="simChange">+0.00 (0.00%)</div>
+      <div class="tf-btns">
+        <button class="tf-btn active" onclick="setTF(this,'1m')">1m</button>
+        <button class="tf-btn" 
