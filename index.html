@@ -598,6 +598,7 @@
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="showScreen('learn')">📚 Learn</button>
     <button class="nav-tab" onclick="showScreen('sim')">📈 Simulator</button>
+    <button class="nav-tab" onclick="showScreen('screener')">🔍 Screener</button>
     <button class="nav-tab" onclick="showScreen('portfolio')">💼 Portfolio</button>
     <button class="nav-tab" onclick="showScreen('glossary')">📖 Glossary</button>
   </div>
@@ -775,6 +776,17 @@
         </table>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ Token Search ══════════════════════ -->
+
+
+<div id="screen-screener" class="screen">
+  <div style="padding:20px;">
+    <h2>Market Screener</h2>
+    <input type="text" id="searchInput" placeholder="Search token..." onkeyup="filterScreener()">
+    <table id="screenerTable" style="width:100%; border-collapse:collapse;"></table>
   </div>
 </div>
 
@@ -1022,6 +1034,12 @@ function drawChart() {
     ctx.fillRect(padL + i * cw + cPad, bodyTop, cw - cPad * 2, bodyH);
   });
 
+  // Simple SMA
+function calculateSMA(data, period) {
+  // ... return array of averages
+}
+// Plot line on canvas
+
   // ── Current price dashed line ──
   const last   = livePrice[currentCoin] || visible[visible.length - 1].close;
   const lineY  = toY(Math.min(Math.max(last, minP), maxP));
@@ -1254,6 +1272,24 @@ function showScreen(name) {
   }
   if (name === 'portfolio') { renderPortfolioScreen(); }
 }
+
+let allCoins = [];
+
+async function loadScreener() {
+  try {
+    const res = await fetch(`${COINGECKO}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`);
+    allCoins = await res.json();
+    renderScreener(allCoins);
+  } catch(e) { console.error(e); }
+}
+
+function renderScreener(coins) {
+  const tbody = document.createElement('tbody'); // or update existing table
+  // Build table with columns: Coin, Price, 24h %, Volume, Market Cap, Action (Trade)
+  // On row click: changeTicker(coin.id)
+}
+
+function filterScreener() { /* simple JS filter */ }
 
 // ═══════════════════ LESSONS ═══════════════════
 const lessons = [
